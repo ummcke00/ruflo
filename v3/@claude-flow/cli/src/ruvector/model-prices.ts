@@ -39,12 +39,16 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   'inclusionai/ling-2.6-flash':         { in: 0.01,  out: 0.03 },
   'google/gemini-2.5-flash-lite':       { in: 0.10,  out: 0.40 },
   'meta-llama/llama-3.3-70b-instruct':  { in: 0.13,  out: 0.40 },
+  'deepseek/deepseek-v4-flash':          { in: 0.07,  out: 0.14 },
   // Mid tier
+  'kwaipilot/kat-coder-pro-v2':          { in: 0.30,  out: 1.20 },
   'anthropic/claude-haiku-4.5':         { in: 1.00,  out: 5.00 },
   'openai/gpt-4.1':                     { in: 2.00,  out: 8.00 },
   // Strong tier
   'anthropic/claude-sonnet-4-6':        { in: 3.00,  out: 15.00 },
   'anthropic/claude-opus-4':            { in: 15.00, out: 75.00 },
+  'openai/gpt-5.6-terra':                { in: 1.80,  out: 14.00 },
+  'moonshotai/kimi-k3':                  { in: 1.00,  out: 5.00 },
   // Tier-label fallbacks (when the trajectory only carries a coarse tier
   // and not a concrete modelId — happens before iter 13 wiring landed).
   haiku:   { in: 1.00,  out: 5.00 },

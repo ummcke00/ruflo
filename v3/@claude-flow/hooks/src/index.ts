@@ -201,6 +201,16 @@ export {
   type SessionHookResult,
 } from './workers/session-hook.js';
 
+// TDD Gate Worker — cold-reviewer structural evidence enforcement.
+// Port of gate/check-evidence.py. Registered as a post-task hook.
+export {
+  TDDGateWorker,
+  createTDDGateWorker,
+  registerTDDGateHook,
+  type GateResult,
+  type TDDGateConfig,
+} from './workers/tdd-gate-worker.js';
+
 // Version
 export const VERSION = '3.0.0-alpha.1';
 

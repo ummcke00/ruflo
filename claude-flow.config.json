@@ -1,0 +1,62 @@
+{
+  "version": "3.38",
+  "agents": {
+    "defaultType": "tdd-worker",
+    "autoSpawn": false,
+    "maxConcurrent": 8,
+    "timeout": 300000,
+    "providers": [
+      {
+        "name": "openrouter",
+        "enabled": true,
+        "apiKey": "$OPENROUTER_API_KEY",
+        "defaultModel": "kwaipilot/kat-coder-pro-v2"
+      }
+    ]
+  },
+  "swarm": {
+    "topology": "hierarchical",
+    "maxAgents": 8,
+    "autoScale": false,
+    "coordinationStrategy": "specialized",
+    "healthCheckInterval": 30000
+  },
+  "memory": {
+    "backend": "hybrid",
+    "persistPath": "./data/memory",
+    "cacheSize": 1000,
+    "enableHNSW": true,
+    "vectorDimension": 384
+  },
+  "mcp": {
+    "serverHost": "localhost",
+    "serverPort": 3000,
+    "autoStart": false,
+    "transportType": "stdio",
+    "tools": []
+  },
+  "cli": {
+    "colorOutput": true,
+    "interactive": true,
+    "verbosity": "normal",
+    "outputFormat": "text",
+    "progressStyle": "spinner"
+  },
+  "hooks": {
+    "enabled": true,
+    "autoExecute": true,
+    "hooks": ["tdd-gate"]
+  },
+  "openrouter": {
+    "model": "kwaipilot/kat-coder-pro-v2",
+    "reviewerModel": "moonshotai/kimi-k3",
+    "threeTierRouting": true,
+    "tierMapping": "config/openrouter-alts.json"
+  },
+  "tdd": {
+    "enabled": true,
+    "workspaceRoot": "/home/wmckenzie/.openclaw/workspace",
+    "maxRounds": 3,
+    "gateWorker": "tdd-gate-worker"
+  }
+}

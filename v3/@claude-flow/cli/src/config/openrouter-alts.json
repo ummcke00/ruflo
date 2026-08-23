@@ -1,0 +1,20 @@
+{
+  "tiers": {
+    "cheap": {
+      "modelId": "deepseek/deepseek-v4-flash",
+      "description": "Fast, cheap model for simple tasks (<30% complexity). $0.07/$0.14 per M."
+    },
+    "mid": {
+      "modelId": "kwaipilot/kat-coder-pro-v2",
+      "description": "Strong coder model. Aced escalating-difficulty tests first-try. $0.30/$1.20 per M."
+    },
+    "heavy": {
+      "modelId": "openai/gpt-5.6-terra",
+      "description": "OpenAI flagship. Coding 76.7, 1M context. For architecture, security, complex reasoning. $1.80/$14 per M."
+    }
+  },
+  "defaultModel": "kwaipilot/kat-coder-pro-v2",
+  "reviewerModel": "moonshotai/kimi-k3",
+  "reviewerProvider": "openrouter",
+  "provider": "openrouter"
+}

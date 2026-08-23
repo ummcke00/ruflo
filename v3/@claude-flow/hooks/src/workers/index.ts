@@ -5,6 +5,14 @@
  * Works on Linux, macOS, and Windows.
  */
 
+export {
+  TDDGateWorker,
+  createTDDGateWorker,
+  registerTDDGateHook,
+  type GateResult,
+  type TDDGateConfig,
+} from './tdd-gate-worker.js';
+
 import { EventEmitter } from 'events';
 import * as os from 'os';
 import * as path from 'path';
@@ -24,7 +32,7 @@ const FILE_CACHE_TTL = 30_000; // 30 seconds
 // Allowed worker names for input validation
 const ALLOWED_WORKERS = new Set([
   'performance', 'health', 'security', 'adr', 'ddd',
-  'patterns', 'learning', 'cache', 'git', 'swarm', 'v3progress'
+  'patterns', 'learning', 'cache', 'git', 'swarm', 'tdd-gate', 'v3progress'
 ]);
 
 // ============================================================================
@@ -415,6 +423,14 @@ export const WORKER_CONFIGS: Record<string, WorkerConfig> = {
     enabled: true,
     priority: WorkerPriority.High,
     timeout: 10_000,
+  },
+  'tdd-gate': {
+    name: 'tdd-gate',
+    description: 'TDD gate — cold-reviewer structural evidence enforcement',
+    interval: 0,  // event-driven, not scheduled
+    enabled: true,
+    priority: WorkerPriority.Critical,
+    timeout: 30_000,
   },
 };
 
