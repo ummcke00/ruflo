@@ -127,7 +127,8 @@
     "ws": "^8.21.0",
     "yaml": "^2.8.0",
     "zod": "^3.22.0",
-    "@claude-flow/memory": "3.1.0"
+    "@claude-flow/memory": "3.1.0",
+    "@claude-flow/providers": "3.0.0"
   },
   "optionalDependencies": {
     "@agntcy/slim-bindings": "2.1.1",
@@ -180,7 +181,8 @@
     "@claude-flow/codex",
     "@claude-flow/mcp",
     "@claude-flow/plugin-agent-federation",
-    "@claude-flow/security"
+    "@claude-flow/security",
+    "@claude-flow/providers"
   ],
   "directories": {
     "doc": "docs"

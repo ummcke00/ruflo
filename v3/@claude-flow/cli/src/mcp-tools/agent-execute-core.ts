@@ -13,6 +13,11 @@ import { join } from 'node:path';
 import { getProjectCwd } from './types.js';
 import { appendAgentExecution, summarizeAgentExecutions, type AgentExecutionSample } from './agent-health-metrics.js';
 import { configManager } from '../services/config-file-manager.js';
+// Type-only: erased at compile time, so importing this module costs nothing.
+// The provider VALUE is loaded lazily inside callOpenRouterProvider (see there)
+// so that commands which never touch OpenRouter — and the isolated sandbox in
+// __tests__/analyze-json-output.test.ts — do not need the package resolvable.
+import type { LLMRequest, LLMResponse } from '@claude-flow/providers';
 
 const STORAGE_DIR = '.claude-flow';
 const AGENT_DIR = 'agents';
@@ -111,6 +116,14 @@ export interface AnthropicCallInput {
    * comment on that function.
    */
   provider?: 'anthropic' | 'openrouter' | 'ollama';
+  /**
+   * Tool definitions to advertise to the model. Only the OpenRouter path
+   * consumes these today; the direct Anthropic single-turn path ignores them
+   * (and therefore stays byte-identical). Passing tools to a model that does
+   * not declare support raises a named capability error rather than being
+   * silently dropped.
+   */
+  tools?: unknown[];
 }
 
 /** A single entry from the persisted `agents.providers` config array. */
@@ -204,11 +217,10 @@ export async function callAnthropicMessages(input: AnthropicCallInput): Promise<
   if (useOpenRouter) {
     const apiKey = openrouterKey || persistedOpenRouter?.apiKey;
     if (apiKey) {
-      return callOpenAICompat({
+      return callOpenRouterProvider({
         ...input,
         apiKey,
         baseUrl: process.env.OPENROUTER_BASE_URL || persistedOpenRouter?.baseUrl || 'https://openrouter.ai/api',
-        providerLabel: 'openrouter',
         // #2357 Finding C: anthropic/claude-3.5-sonnet was retired Oct 2025.
         // Default to the same canonical family the rest of the resolver uses
         // (MODEL_MAP). `OPENROUTER_DEFAULT_MODEL` still wins for callers who
@@ -436,92 +448,140 @@ async function callOllamaCompat(
 }
 
 /**
- * Generic OpenAI-compat caller for OpenRouter and other OpenAI-shaped
- * endpoints. #2042 — reporter (@ummcke00) configured OpenRouter via
- * config.yaml but agent_execute hardcoded the Anthropic fetch. This is
- * the same shape as `callOllamaCompat` but routes to a configurable
- * baseUrl + sends an OpenRouter-friendly default model when none is
- * specified. Logical model names (haiku/sonnet/opus) pass through —
- * OpenRouter accepts vendor-prefixed names like `anthropic/claude-3.5-sonnet`.
+ * OpenRouter adapter — the first-class path.
+ *
+ * Routes through `OpenRouterProvider` from `@claude-flow/providers` instead of
+ * hand-rolling a chat-completions fetch. That buys three things the old shim
+ * could not do:
+ *
+ *   1. **Declared capabilities.** Tools, structured output, reasoning control,
+ *      vision and audio are gated on the model's declared profile rather than
+ *      guessed from its name or silently dropped.
+ *   2. **Multipart prompt caching.** A system prompt becomes a content-part
+ *      array with `cache_control: ephemeral`, matching the direct Anthropic
+ *      path. The old shim flattened it to a plain string, losing the cache
+ *      discount on every call.
+ *   3. **Named errors.** An unsupported combination raises a typed error whose
+ *      message names the fix, instead of a 400 from the endpoint.
+ *
+ * Two deliberate differences from the retired `callOpenAICompat`, both fixes:
+ *   - No unconditional `temperature: 0.7`. Models that reject sampling params
+ *     (Opus 4.8 and friends) got an HTTP 400 from that.
+ *   - The model id is sent verbatim. `'anthropic/claude-sonnet-4-6'` is a valid
+ *     OpenRouter slug; stripping the vendor prefix produced an id the endpoint
+ *     does not know.
  */
-async function callOpenAICompat(
+async function callOpenRouterProvider(
   input: AnthropicCallInput & {
     apiKey: string;
     baseUrl: string;
-    providerLabel: string;
     defaultModel: string;
   },
 ): Promise<AnthropicCallResult> {
-  const model = resolveOpenAICompatModel(input.model, input.defaultModel);
   const startedAt = Date.now();
-  const base = input.baseUrl.replace(/\/+$/, '');
-  const url = `${base}/v1/chat/completions`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs || 60000);
+  const modelId = resolveOpenRouterModel(input.model, input.defaultModel);
+
+  // Lazy, and deliberately so. A top-level static import would make every CLI
+  // entry point load the whole provider system merely because this module is
+  // reachable from the mcp-tools registry — and would break any harness that
+  // exercises a subset of the source tree in isolation.
+  let OpenRouterProvider: typeof import('@claude-flow/providers').OpenRouterProvider;
   try {
-    const messages: Array<{ role: string; content: string }> = [];
-    if (input.systemPrompt) messages.push({ role: 'system', content: input.systemPrompt });
-    messages.push({ role: 'user', content: input.prompt });
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        'content-type': 'application/json',
-        // OpenRouter convention: identify the integrating app for analytics
-        // and rate-limit tiering. Harmless on other OpenAI-compat backends.
-        'HTTP-Referer': 'https://github.com/ruvnet/ruflo',
-        'X-Title': 'Ruflo',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: input.maxTokens || 1024,
-        temperature: typeof input.temperature === 'number' ? input.temperature : 0.7,
-        messages,
-      }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '<unreadable error body>');
-      return { success: false, model, error: `${input.providerLabel} API error ${res.status}: ${errText.slice(0, 400)}` };
-    }
-    const data = await res.json() as {
-      id?: string;
-      model?: string;
-      choices: Array<{ message: { content: string }; finish_reason?: string }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+    ({ OpenRouterProvider } = await import('@claude-flow/providers'));
+  } catch (err) {
+    return {
+      success: false,
+      model: modelId,
+      error:
+        `The OpenRouter provider module could not be loaded: ${err instanceof Error ? err.message : String(err)}. ` +
+        'Install @claude-flow/providers, or set ANTHROPIC_API_KEY to use the direct Anthropic path.',
+      durationMs: Date.now() - startedAt,
     };
-    const textOut = data.choices?.[0]?.message?.content ?? '';
-    const usage = data.usage ?? {};
+  }
+
+  const provider = new OpenRouterProvider({
+    config: {
+      provider: 'openrouter',
+      apiKey: input.apiKey,
+      apiUrl: input.baseUrl,
+      model: modelId,
+      maxTokens: input.maxTokens || 1024,
+      // Honour the caller's deadline. Without this the provider falls back to
+      // its own 60s default and a stalled response body is never aborted — the
+      // caller's timeout silently stops working.
+      ...(typeof input.timeoutMs === 'number' ? { timeout: input.timeoutMs } : {}),
+      // The caller's explicit temperature only. Never a default: a model that
+      // declares temperature unsupported must not receive one.
+      ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
+      providerOptions: {
+        cwd: getProjectCwd(),
+        // One call per execution: skip the liveness probe that would otherwise
+        // add a wasted /v1/models round trip before the completion.
+        skipInitialHealthCheck: true,
+      },
+    },
+  });
+
+  const request: LLMRequest = {
+    model: modelId,
+    maxTokens: input.maxTokens || 1024,
+    messages: [
+      ...(input.systemPrompt ? [{ role: 'system' as const, content: input.systemPrompt }] : []),
+      { role: 'user' as const, content: input.prompt },
+    ],
+    ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
+    ...(Array.isArray(input.tools) && input.tools.length > 0
+      ? { tools: input.tools as LLMRequest['tools'] }
+      : {}),
+  };
+
+  try {
+    await provider.initialize();
+    const res: LLMResponse = await provider.complete(request);
     return {
       success: true,
-      model: data.model || model,
-      messageId: data.id,
-      stopReason: data.choices?.[0]?.finish_reason ?? 'end_turn',
-      output: textOut,
+      model: res.model as string,
+      messageId: res.id,
+      stopReason: res.finishReason ?? 'end_turn',
+      output: res.content,
       usage: {
-        inputTokens: usage.prompt_tokens ?? 0,
-        outputTokens: usage.completion_tokens ?? 0,
-        totalTokens: usage.total_tokens ?? 0,
+        inputTokens: res.usage?.promptTokens ?? 0,
+        outputTokens: res.usage?.completionTokens ?? 0,
+        totalTokens: res.usage?.totalTokens ?? 0,
       },
       durationMs: Date.now() - startedAt,
     };
   } catch (err) {
+    // Surface the named error's own message. Its text names the fix ("declare
+    // it under agents.modelCapabilities", "remove the tools", ...), which a
+    // generic wrapper would throw away.
+    //
+    // The HTTP status MUST be included. The ADR-149 fallback router decides
+    // whether to try another model by testing this string for a transient
+    // transport failure (429/5xx/timeout). Reporting only the API's own
+    // message text silently disables retries for a provider that returns 503
+    // with a bare "unavailable" body.
+    const status = (err as { statusCode?: number } | null)?.statusCode;
+    const message = err instanceof Error ? err.message : String(err);
     return {
       success: false,
-      model,
-      error: err instanceof Error ? err.message : String(err),
+      model: modelId,
+      error: typeof status === 'number' ? `openrouter API error ${status}: ${message}` : message,
       durationMs: Date.now() - startedAt,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
-function resolveOpenAICompatModel(input: string | undefined, fallback: string): string {
+/**
+ * Resolve a caller model id to an OpenRouter slug.
+ *
+ * Tier aliases map to concrete slugs. Everything else — including
+ * `'anthropic/…'` ids — passes through unchanged: those ARE valid OpenRouter
+ * model ids, and stripping the vendor prefix (what the old code did) produces
+ * an id the endpoint rejects.
+ */
+function resolveOpenRouterModel(input: string | undefined, fallback: string): string {
   if (!input) return fallback;
-  // Logical Claude names → OpenRouter Anthropic-vendored names.
-  // #2357 Finding C: the 3.5 / 3-opus slugs were retired Oct 2025; align with
-  // MODEL_MAP (claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-8).
   if (input === 'haiku') return 'anthropic/claude-haiku-4-5';
   if (input === 'sonnet' || input === 'inherit') return 'anthropic/claude-sonnet-4-6';
   if (input === 'opus') return 'anthropic/claude-opus-4-8';

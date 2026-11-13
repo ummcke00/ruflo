@@ -12,7 +12,8 @@
  *   1. executeAgentTask() must NOT contain the old inline
  *      `fetch('https://api.anthropic.com/...')` bypass.
  *   2. callAnthropicMessages() must reference OPENROUTER_API_KEY.
- *   3. callOpenAICompat() must exist as a helper.
+ *   3. The OpenRouter branch must delegate to OpenRouterProvider, and the
+ *      retired callOpenAICompat() shim must not come back.
  *   4. The "no provider configured" error must list all three options.
  *
  * Plus one behavioral check: invoke callAnthropicMessages() with
@@ -51,11 +52,16 @@ if (!/OPENROUTER_API_KEY/.test(src)) {
   pass('OPENROUTER_API_KEY env var routes the OpenRouter branch');
 }
 
-// 3. callOpenAICompat helper exists
-if (!/async function callOpenAICompat/.test(src)) {
-  fail('callOpenAICompat helper missing — #2042 fix incomplete');
+// 3. OpenRouter delegates to the first-class provider; the hand-rolled shim
+//    is retired. Both halves matter — asserting only the new call would let a
+//    dead shim linger, and asserting only the removal would pass with no
+//    dispatch at all.
+if (!/callOpenRouterProvider\(/.test(src)) {
+  fail('OpenRouter branch does not delegate to callOpenRouterProvider — first-class wiring missing');
+} else if (/async function callOpenAICompat\b/.test(src)) {
+  fail('callOpenAICompat shim still present — retire it and use OpenRouterProvider');
 } else {
-  pass('callOpenAICompat helper exists for OpenRouter + OpenAI-compat backends');
+  pass('OpenRouter delegates to OpenRouterProvider; legacy callOpenAICompat shim retired');
 }
 
 // 4. No-provider error names all three options

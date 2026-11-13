@@ -177,8 +177,16 @@ export abstract class BaseProvider extends EventEmitter implements ILLMProvider 
       this.startHealthChecks();
     }
 
-    // Initial health check
-    await this.healthCheck();
+    // Initial health check.
+    //
+    // Per-request usage (agent_execute's OpenRouter adapter) opts out: a
+    // liveness probe before every single completion doubles the round trips of
+    // a provider that is about to make exactly one call, and a failing probe
+    // can reject a request the real call would have served. Long-lived
+    // providers keep the default behaviour.
+    if (this.config.providerOptions?.skipInitialHealthCheck !== true) {
+      await this.healthCheck();
+    }
   }
 
   /**

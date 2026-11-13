@@ -5,7 +5,8 @@
     "v3/@claude-flow/codex",
     "v3/@claude-flow/mcp",
     "v3/@claude-flow/plugin-agent-federation",
-    "v3/@claude-flow/security"
+    "v3/@claude-flow/security",
+    "v3/@claude-flow/providers"
   ],
   "description": "Ruflo - Enterprise AI agent orchestration for Claude Code. Deploy 60+ specialized agents in coordinated swarms with self-learning, fault-tolerant consensus, vector memory, and MCP integration",
   "main": "dist/index.js",
