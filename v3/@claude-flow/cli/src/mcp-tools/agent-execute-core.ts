@@ -159,6 +159,38 @@ function getPersistedProviderConfig(name: string): PersistedProviderEntry | unde
   }
 }
 
+/**
+ * Decide whether a failed call is worth retrying on another model.
+ *
+ * The provider already classifies every failure: RufloProviderError carries an
+ * explicit `retryable` (false for auth, capability and other permanent faults),
+ * LLMProviderError carries `statusCode`. Read those.
+ *
+ * This used to regex-test `result.error` for 429/5xx/timeout, which is wrong in
+ * both directions: a 400 body can mention "503" and trigger a pointless model
+ * swap, while a real AbortError ("This operation was aborted") has no status
+ * and no "timeout" token and was therefore never retried at all.
+ *
+ * The text check survives only as a last resort for results that predate the
+ * structured fields (an older caller or a provider without classification).
+ */
+export function isRetryableFailure(result: {
+  success?: boolean;
+  error?: string;
+  retryable?: boolean;
+  statusCode?: number;
+}): boolean {
+  if (result.success) return false;
+  if (typeof result.retryable === 'boolean') return result.retryable;
+
+  const status = result.statusCode;
+  if (typeof status === 'number') {
+    return status === 408 || status === 425 || status === 429 || status >= 500;
+  }
+
+  return /\b(429|500|502|503|504|timeout|ECONNRESET|ETIMEDOUT)\b/i.test(result.error ?? '');
+}
+
 export interface AnthropicCallResult {
   success: boolean;
   model?: string;
@@ -168,6 +200,15 @@ export interface AnthropicCallResult {
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
   durationMs?: number;
   error?: string;
+  /**
+   * The provider's OWN verdict on whether this failure is worth retrying, and
+   * the status it came with. The ADR-149 fallback router reads these instead of
+   * regex-testing `error`, because text is not a reliable classifier: a 400 body
+   * can mention "503", and a real AbortError carries no status at all.
+   * Optional so every existing caller and test keeps compiling.
+   */
+  retryable?: boolean;
+  statusCode?: number;
 }
 
 /**
@@ -594,12 +635,24 @@ async function callOpenRouterProvider(
     const cause = wrapped instanceof Error && wrapped.message && !message.includes(wrapped.message)
       ? ` (cause: ${wrapped.message.slice(0, 200)})`
       : '';
+    // Prefer the provider's own classification. RufloProviderError carries
+    // `retryable` explicitly (false for auth/capability/permanent faults), and
+    // LLMProviderError carries `statusCode`. Aborts arrive with no status but
+    // are retryable, which is precisely what the text-regex could not express.
+    const isAbort = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+    const retryable = typeof (err as { retryable?: boolean } | null)?.retryable === 'boolean'
+      ? (err as { retryable: boolean }).retryable
+      : isAbort || typeof status === 'number'
+        ? isAbort || status === 408 || status === 429 || (typeof status === 'number' && status >= 500)
+        : false;
     return {
       success: false,
       model: modelId,
       error: typeof status === 'number'
         ? `openrouter API error ${status}: ${message}${cause}`
         : `${message}${cause}`,
+      ...(typeof status === 'number' ? { statusCode: status } : {}),
+      retryable,
       durationMs: Date.now() - startedAt,
     };
   }
@@ -791,7 +844,7 @@ export async function executeAgentTask(input: AgentExecuteInput): Promise<AgentE
   // Keep feedback for each completed attempt before switching model identity.
   const failedAttempts: Array<{ model: ClaudeModel; modelId: string }> = [];
   if (!result.success && agent.modelId && fallbackBudget > 0) {
-    const isRetryable = /\b(429|500|502|503|504|timeout|ECONNRESET|ETIMEDOUT)\b/i.test(result.error ?? '');
+    const isRetryable = isRetryableFailure(result);
     if (isRetryable) {
       try {
         const { nextCostOptimalAlternative } = await import('../ruvector/neural-router.js');
@@ -815,6 +868,10 @@ export async function executeAgentTask(input: AgentExecuteInput): Promise<AgentE
               maxTokens: input.maxTokens,
               temperature: input.temperature,
               timeoutMs: input.timeoutMs,
+              // N-3 — keep the agent's provider pin. Without this the retry
+              // re-resolves from env and can silently land on a different
+              // provider than the one the agent was pinned to.
+              provider: agent.provider,
             });
             // Record the model that ACTUALLY answered (or errored). On success,
             // update agent.modelId so downstream observers see the retry winner.
