@@ -57,7 +57,7 @@ const MAX_CACHE_BREAKPOINTS = 4;
 const TIER_ALIASES: Record<string, string> = {
   haiku: 'anthropic/claude-haiku-4-5',
   sonnet: 'anthropic/claude-sonnet-4-6',
-  opus: 'anthropic/claude-opus-4-7',
+  opus: 'anthropic/claude-opus-4-8',
   inherit: DEFAULT_MODEL,
 };
 
@@ -153,6 +153,7 @@ export class OpenRouterProvider extends BaseProvider {
       'anthropic/claude-haiku-4-5',
       'anthropic/claude-sonnet-4-6',
       'anthropic/claude-opus-4-7',
+      'anthropic/claude-opus-4-8',
       'anthropic/claude-sonnet-5',
       'openai/gpt-4.1',
       'openai/gpt-4o',

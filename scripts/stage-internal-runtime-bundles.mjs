@@ -42,6 +42,12 @@ export const INTERNAL_RUNTIME_PACKAGES = [
     requiredAssets: ['dist'],
     optionalAssets: ['README.md', 'LICENSE'],
   },
+  {
+    directory: 'providers',
+    name: '@claude-flow/providers',
+    requiredAssets: ['dist'],
+    optionalAssets: ['README.md', 'LICENSE'],
+  },
 ];
 
 const BUILD_PREREQUISITES = ['shared'];

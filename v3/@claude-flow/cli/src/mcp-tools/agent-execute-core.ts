@@ -499,28 +499,25 @@ async function callOpenRouterProvider(
     };
   }
 
-  const provider = new OpenRouterProvider({
-    config: {
-      provider: 'openrouter',
-      apiKey: input.apiKey,
-      apiUrl: input.baseUrl,
+  // A module can resolve successfully and still be the wrong shape. The
+  // published @claude-flow/providers@3.0.0 tarball predates this provider: it
+  // imports fine and simply has no OpenRouterProvider export. Without this
+  // guard the construction below throws a raw TypeError out of
+  // callAnthropicMessages, whose contract is to always return an
+  // AnthropicCallResult — the throw would skip executeAgentTask's ADR-149
+  // fallback and health recording, and the named error above would never fire
+  // in the one case it exists for.
+  if (typeof OpenRouterProvider !== 'function') {
+    return {
+      success: false,
       model: modelId,
-      maxTokens: input.maxTokens || 1024,
-      // Honour the caller's deadline. Without this the provider falls back to
-      // its own 60s default and a stalled response body is never aborted — the
-      // caller's timeout silently stops working.
-      ...(typeof input.timeoutMs === 'number' ? { timeout: input.timeoutMs } : {}),
-      // The caller's explicit temperature only. Never a default: a model that
-      // declares temperature unsupported must not receive one.
-      ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
-      providerOptions: {
-        cwd: getProjectCwd(),
-        // One call per execution: skip the liveness probe that would otherwise
-        // add a wasted /v1/models round trip before the completion.
-        skipInitialHealthCheck: true,
-      },
-    },
-  });
+      error:
+        'The installed @claude-flow/providers does not export OpenRouterProvider, so it is too old. ' +
+        'Upgrade @claude-flow/providers to a version that ships the OpenRouter provider, ' +
+        'or set ANTHROPIC_API_KEY to use the direct Anthropic path.',
+      durationMs: Date.now() - startedAt,
+    };
+  }
 
   const request: LLMRequest = {
     model: modelId,
@@ -536,6 +533,33 @@ async function callOpenRouterProvider(
   };
 
   try {
+    const provider = new OpenRouterProvider({
+      // Silenced deliberately: the default consoleLogger prints an INFO line on
+      // every initialize(), which would corrupt JSON output for `--format json`
+      // consumers. Diagnostics here come from the returned result, not stdout.
+      logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      config: {
+        provider: 'openrouter',
+        apiKey: input.apiKey,
+        apiUrl: input.baseUrl,
+        model: modelId,
+        maxTokens: input.maxTokens || 1024,
+        // Honour the caller's deadline. Without this the provider falls back to
+        // its own 60s default and a stalled response body is never aborted — the
+        // caller's timeout silently stops working.
+        ...(typeof input.timeoutMs === 'number' ? { timeout: input.timeoutMs } : {}),
+        // The caller's explicit temperature only. Never a default: a model that
+        // declares temperature unsupported must not receive one.
+        ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
+        providerOptions: {
+          cwd: getProjectCwd(),
+          // One call per execution: skip the liveness probe that would otherwise
+          // add a wasted /v1/models round trip before the completion.
+          skipInitialHealthCheck: true,
+        },
+      },
+    });
+
     await provider.initialize();
     const res: LLMResponse = await provider.complete(request);
     return {
@@ -562,11 +586,20 @@ async function callOpenRouterProvider(
     // message text silently disables retries for a provider that returns 503
     // with a bare "unavailable" body.
     const status = (err as { statusCode?: number } | null)?.statusCode;
-    const message = err instanceof Error ? err.message : String(err);
+    // Cap the text, as the retired shim did. An upstream body can be a whole
+    // HTML page; it must not land unbounded in a result object.
+    const raw = err instanceof Error ? err.message : String(err);
+    const message = raw.length > 400 ? `${raw.slice(0, 400)}…` : raw;
+    const wrapped = (err as { originalError?: unknown } | null)?.originalError;
+    const cause = wrapped instanceof Error && wrapped.message && !message.includes(wrapped.message)
+      ? ` (cause: ${wrapped.message.slice(0, 200)})`
+      : '';
     return {
       success: false,
       model: modelId,
-      error: typeof status === 'number' ? `openrouter API error ${status}: ${message}` : message,
+      error: typeof status === 'number'
+        ? `openrouter API error ${status}: ${message}${cause}`
+        : `${message}${cause}`,
       durationMs: Date.now() - startedAt,
     };
   }

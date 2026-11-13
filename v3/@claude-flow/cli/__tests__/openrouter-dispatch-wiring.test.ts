@@ -178,3 +178,43 @@ describe('callAnthropicMessages — OpenRouter dispatch', () => {
     ]);
   });
 });
+/**
+ * R2-2 — a provider package that resolves but is the WRONG SHAPE.
+ *
+ * The lazy import's try/catch only covers a module that fails to load. It does
+ * not cover a module that loads fine and simply has no `OpenRouterProvider`
+ * export — which is exactly what the published @claude-flow/providers@3.0.0
+ * tarball looks like, since it predates this provider.
+ *
+ * Without an explicit shape check, `new OpenRouterProvider(...)` throws a raw
+ * TypeError out of `callAnthropicMessages`. That function's contract is to
+ * always return an AnthropicCallResult, so a throw skips executeAgentTask's
+ * ADR-149 fallback retry and its health-metric recording, and surfaces to the
+ * user as an unexplained crash instead of the named, actionable error.
+ */
+describe('callAnthropicMessages — OpenRouter provider module of the wrong shape', () => {
+  it('returns a named failure instead of throwing when the export is missing', async () => {
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+
+    // The module resolves; the class is simply absent.
+    vi.doMock('@claude-flow/providers', () => ({ OpenRouterProvider: undefined }));
+
+    const { callAnthropicMessages } = await import('../src/mcp-tools/agent-execute-core.js');
+
+    // Must RESOLVE to a result object, not reject.
+    const res = await callAnthropicMessages({
+      prompt: 'ping',
+      model: 'openai/gpt-4.1',
+      provider: 'openrouter',
+    });
+
+    expect(res.success).toBe(false);
+    // The message has to name the actual problem and the way out.
+    expect(res.error).toContain('OpenRouterProvider');
+    expect(res.error).toMatch(/too old|upgrade/i);
+
+    vi.doUnmock('@claude-flow/providers');
+  });
+});

@@ -1827,8 +1827,9 @@ jobs:
             "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
 
       - name: Run leaf-package publish audit (#3335, #3390)
-        # Only four @claude-flow/* components are bundled into the release
-        # tarballs (INTERNAL_RUNTIME_PACKAGES). cli-core, neural, shared and
+        # Only five @claude-flow/* components are bundled into the release
+        # tarballs (INTERNAL_RUNTIME_PACKAGES): security, codex, mcp,
+        # plugin-agent-federation and providers. cli-core, neural, shared and
         # memory resolve from the REGISTRY, so a merged source change in one of
         # them does NOT ship with the three-package train — the release carries
         # the last published copy instead. #3334 lost a fix that way (#3335),
