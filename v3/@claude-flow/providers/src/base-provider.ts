@@ -553,6 +553,15 @@ export abstract class BaseProvider extends EventEmitter implements ILLMProvider 
     }
 
     if (error instanceof Error) {
+      // A caller deadline firing surfaces here as AbortError. It is the single
+      // most retryable failure there is, but it carries no status and no
+      // "timeout" token, so it must be recognised by name. Without this branch
+      // the old catch-all default was the only thing retrying aborts — the same
+      // default that retried code bugs.
+      if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+        return new LLMProviderError('Request aborted or timed out', 'TIMEOUT', this.name, undefined, true);
+      }
+
       if (error.message.includes('rate limit')) {
         return new RateLimitError(error.message, this.name);
       }
@@ -561,17 +570,39 @@ export abstract class BaseProvider extends EventEmitter implements ILLMProvider 
         return new LLMProviderError('Request timed out', 'TIMEOUT', this.name, undefined, true);
       }
 
-      if (error.message.includes('ECONNREFUSED') || error.message.includes('fetch failed')) {
+      if (
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('ECONNRESET') ||
+        error.message.includes('fetch failed')
+      ) {
         return new ProviderUnavailableError(this.name, { originalError: error.message });
+      }
+
+      // Not every thrown error is a transport fault. A TypeError from our own
+      // code, or a SyntaxError from parsing a non-JSON body (a proxy's HTML
+      // error page served with a 200), will fail identically on every model.
+      // Retrying them swaps models and doubles latency for no chance of success.
+      if (error.name === 'SyntaxError' || error.name === 'TypeError' || error.name === 'ReferenceError') {
+        return new LLMProviderError(
+          error.message,
+          'NON_RETRYABLE_CLIENT_ERROR',
+          this.name,
+          undefined,
+          false
+        );
       }
     }
 
+    // Unrecognised failures are NOT assumed retryable. Callers now branch on
+    // this flag, so defaulting it to true turned every unknown fault into a
+    // silent model swap. A provider that wants a specific error retried must
+    // say so explicitly above.
     return new LLMProviderError(
       error instanceof Error ? error.message : String(error),
       'UNKNOWN',
       this.name,
       undefined,
-      true
+      false
     );
   }
 

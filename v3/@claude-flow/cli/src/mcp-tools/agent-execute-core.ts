@@ -160,6 +160,42 @@ function getPersistedProviderConfig(name: string): PersistedProviderEntry | unde
 }
 
 /**
+ * Is this HTTP status worth retrying on a different model?
+ *
+ * 408/425 are transport-ish, 429 is rate limiting, 5xx is the server's fault.
+ * Everything else (400/401/403/404/409/413/422, ...) is a permanent client or
+ * auth fault: retrying it on another model cannot succeed and just doubles the
+ * user's latency.
+ */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+/**
+ * Classify an error thrown out of a fetch/json call.
+ *
+ * Aborts and timeouts are retryable. A TypeError or SyntaxError means OUR code
+ * or the response shape is wrong — a proxy's HTML error page served with 200,
+ * for instance — which fails identically on every model, so retrying it only
+ * doubles latency. Anything unrecognised is treated as NOT retryable: the
+ * caller branches on this, so a default of "retry" would turn every unknown
+ * fault into a silent model swap.
+ */
+export function classifyThrownError(err: unknown): { retryable: boolean; statusCode?: number } {
+  if (err instanceof Error) {
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') return { retryable: true };
+    if (err.name === 'SyntaxError' || err.name === 'TypeError' || err.name === 'ReferenceError') {
+      return { retryable: false };
+    }
+    const message = err.message ?? '';
+    if (/\b(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN)\b/.test(message) || /fetch failed/i.test(message)) {
+      return { retryable: true };
+    }
+  }
+  return { retryable: false };
+}
+
+/**
  * Decide whether a failed call is worth retrying on another model.
  *
  * The provider already classifies every failure: RufloProviderError carries an
@@ -339,7 +375,17 @@ export async function callAnthropicMessages(input: AnthropicCallInput): Promise<
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '<unreadable error body>');
-      return { success: false, model, error: `Anthropic API error ${res.status}: ${errText.slice(0, 400)}` };
+      // R3-2 — the Anthropic path is the DEFAULT path for most users. It used
+      // to return neither statusCode nor retryable, so it fell through to the
+      // text regex and still swapped models on a 400 whose body mentioned
+      // "503", or on "prompt is too long ... max_tokens 500".
+      return {
+        success: false,
+        model,
+        error: `Anthropic API error ${res.status}: ${errText.slice(0, 400)}`,
+        statusCode: res.status,
+        retryable: isRetryableStatus(res.status),
+      };
     }
     const data = await res.json() as {
       id: string;
@@ -366,10 +412,14 @@ export async function callAnthropicMessages(input: AnthropicCallInput): Promise<
       durationMs: Date.now() - startedAt,
     };
   } catch (err) {
+    // R3-2 — an abort here is the most retryable failure there is, and it was
+    // never retried because it carries no status and no "timeout" token.
+    const classification = classifyThrownError(err);
     return {
       success: false,
       model,
       error: err instanceof Error ? err.message : String(err),
+      ...classification,
       durationMs: Date.now() - startedAt,
     };
   } finally {
@@ -446,7 +496,15 @@ async function callOllamaCompat(
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => '<unreadable error body>');
-      return { success: false, model, error: `Ollama API error ${res.status} at ${url}: ${errText.slice(0, 400)}` };
+      // R3-2 — same gap as the Anthropic path: without a structured verdict the
+      // router regex-matched the body and swapped models on permanent faults.
+      return {
+        success: false,
+        model,
+        error: `Ollama API error ${res.status} at ${url}: ${errText.slice(0, 400)}`,
+        statusCode: res.status,
+        retryable: isRetryableStatus(res.status),
+      };
     }
     const data = (await res.json()) as {
       id?: string;
@@ -477,10 +535,12 @@ async function callOllamaCompat(
       durationMs: Date.now() - startedAt,
     };
   } catch (err) {
+    const classification = classifyThrownError(err);
     return {
       success: false,
       model,
       error: err instanceof Error ? err.message : String(err),
+      ...classification,
       durationMs: Date.now() - startedAt,
     };
   } finally {
