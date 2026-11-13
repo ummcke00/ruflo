@@ -38,3 +38,40 @@ export { RuVectorProvider } from './ruvector-provider.js';
 
 // Export provider manager
 export { ProviderManager, createProviderManager } from './provider-manager.js';
+
+// Export OpenRouter provider (first-class, capability-gated)
+export { OpenRouterProvider } from './openrouter-provider.js';
+export type {
+  OpenRouterToolDefinition,
+  OpenRouterResponseSchema,
+  OpenRouterRequestExtras,
+} from './openrouter-provider.js';
+
+// Export capability registry (declared capabilities, never inferred)
+export {
+  resolveModelCapabilities,
+  loadOpenRouterModelCatalogCache,
+  unverifiedDefault,
+  isVerifiedProfile,
+  STATIC_CAPABILITY_MANIFEST,
+} from './capability-registry.js';
+export type {
+  ModelCapabilityProfile,
+  CapabilitySource,
+  StructuredOutputMode,
+  PromptCachingMode,
+  ReasoningControlMode,
+  ResolveCapabilitiesOptions,
+} from './capability-registry.js';
+
+// Export named provider errors
+export {
+  RufloProviderError,
+  UnsupportedCapabilityError,
+  UnsupportedParameterError,
+  ServiceProviderMismatchError,
+  ProviderAuthenticationError,
+  UnknownModelCapabilityError,
+  AgentLoopMaxIterationsError,
+  CAPABILITY_CODES,
+} from './errors.js';
