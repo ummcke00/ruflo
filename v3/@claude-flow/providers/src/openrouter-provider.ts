@@ -197,7 +197,7 @@ export class OpenRouterProvider extends BaseProvider {
 
     this.baseUrl = (this.config.apiUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
     this.headers = {
-      Authorization: `Bearer ***}`,
+      Authorization: `Bearer ${this.config.apiKey}`,
       'Content-Type': 'application/json',
       // OpenRouter convention: identify the integrating app for analytics
       // and rate-limit tiering.
