@@ -234,3 +234,35 @@ describe('round 3 review — retry classification across every provider path', (
     expect(spy).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * R3-1 follow-up: Node raises network failures as `TypeError: fetch failed`
+ * (with the real cause on `.cause`). A blanket "TypeError is not retryable"
+ * rule therefore makes the most common transient fault — a dropped connection
+ * — permanently unretryable. The reviewer's wording was "any TypeError OTHER
+ * THAN 'fetch failed'", and the first cut of this helper missed that.
+ */
+describe('classifyThrownError — fetch failures are transport faults, not code bugs', () => {
+  it('retries a Node "TypeError: fetch failed"', async () => {
+    const { classifyThrownError } = await import('../src/mcp-tools/agent-execute-core.js');
+    const err = new TypeError('fetch failed');
+    expect(classifyThrownError(err).retryable).toBe(true);
+  });
+
+  it('retries a fetch failure carrying an ECONNRESET cause', async () => {
+    const { classifyThrownError } = await import('../src/mcp-tools/agent-execute-core.js');
+    const err = new TypeError('fetch failed');
+    (err as unknown as { cause: unknown }).cause = { code: 'ECONNRESET' };
+    expect(classifyThrownError(err).retryable).toBe(true);
+  });
+
+  it('still refuses a code-bug TypeError', async () => {
+    const { classifyThrownError } = await import('../src/mcp-tools/agent-execute-core.js');
+    expect(classifyThrownError(new TypeError('x.map is not a function')).retryable).toBe(false);
+  });
+
+  it('refuses a SyntaxError from a non-JSON body', async () => {
+    const { classifyThrownError } = await import('../src/mcp-tools/agent-execute-core.js');
+    expect(classifyThrownError(new SyntaxError('Unexpected token <')).retryable).toBe(false);
+  });
+});

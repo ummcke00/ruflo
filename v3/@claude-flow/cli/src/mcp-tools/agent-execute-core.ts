@@ -184,12 +184,25 @@ export function isRetryableStatus(status: number): boolean {
 export function classifyThrownError(err: unknown): { retryable: boolean; statusCode?: number } {
   if (err instanceof Error) {
     if (err.name === 'AbortError' || err.name === 'TimeoutError') return { retryable: true };
+
+    // Transport faults must be tested BEFORE the TypeError rule below, because
+    // Node reports a dropped connection as `TypeError: fetch failed` with the
+    // real cause on `.cause`. Checking the class first would make the single
+    // most common transient failure permanently unretryable.
+    const message = err.message ?? '';
+    const causeCode = (err as { cause?: { code?: string } }).cause?.code ?? '';
+    if (
+      /fetch failed/i.test(message) ||
+      /\b(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|EPIPE|ENETUNREACH)\b/.test(message) ||
+      /\b(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|EPIPE|ENETUNREACH)\b/.test(causeCode)
+    ) {
+      return { retryable: true };
+    }
+
+    // NOW the code bugs: a TypeError from our own logic or a SyntaxError from
+    // parsing a non-JSON body fails identically on every model.
     if (err.name === 'SyntaxError' || err.name === 'TypeError' || err.name === 'ReferenceError') {
       return { retryable: false };
-    }
-    const message = err.message ?? '';
-    if (/\b(ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN)\b/.test(message) || /fetch failed/i.test(message)) {
-      return { retryable: true };
     }
   }
   return { retryable: false };
